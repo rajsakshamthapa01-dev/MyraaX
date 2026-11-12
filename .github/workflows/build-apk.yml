@@ -1,11 +1,14 @@
 
 name: Build APK
 
-on:
+"on":
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       render_url:
-        description: "Your Render server URL"
+        description: "Myraa Render Server URL"
         required: true
         type: string
 
@@ -20,7 +23,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 11
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -29,36 +32,38 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK Packages
+      - name: Install Android SDK
         run: |
           sdkmanager --install \
             "platforms;android-33" \
             "build-tools;33.0.2"
 
-      - name: Setup Gradle 7.5
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "7.5"
 
-      - name: Configure Myraa Server URL
+      - name: Extract Myraa ZIP
+        run: |
+          unzip -oq Myraa-ready.zip -d extracted
+          ls -la extracted
+          test -d extracted/Myraa/MYRAA-Native
+
+      - name: Configure Render URL
         env:
-          RENDER_URL: ${{ inputs.render_url }}
+          RENDER_URL: ${{ inputs.render_url || 'https://myraax-eueg.onrender.com' }}
         run: |
           python3 - <<'PY'
           import os, re, html
           from pathlib import Path
 
           url = os.environ["RENDER_URL"].strip().rstrip("/")
+          path = Path("extracted/Myraa/MYRAA-Native/app/src/main/res/values/strings.xml")
 
           if not url.startswith("https://"):
-              raise SystemExit("Render URL must start with https://")
+              raise SystemExit("Invalid Render URL")
 
-          file = Path(
-              "Myraa/MYRAA-Native/app/src/main/res/values/strings.xml"
-          )
-
-          content = file.read_text(encoding="utf-8")
-
+          content = path.read_text(encoding="utf-8")
           updated, count = re.subn(
               r'(<string name="app_url">).*?(</string>)',
               lambda m: m.group(1) + html.escape(url) + m.group(2),
@@ -67,23 +72,20 @@ jobs:
           )
 
           if count != 1:
-              raise SystemExit("app_url string not found")
+              raise SystemExit("app_url not found in strings.xml")
 
-          file.write_text(updated, encoding="utf-8")
-          print("Myraa server URL configured successfully")
-
+          path.write_text(updated, encoding="utf-8")
           PY
 
-      - name: Build Myraa APK
+      - name: Build APK
         run: |
-          gradle -p Myraa/MYRAA-Native \
+          gradle -p extracted/Myraa/MYRAA-Native \
             --no-daemon assembleDebug
 
-      - name: Upload Myraa APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Myraa-APK
-          path: Myraa/MYRAA-Native/app/build/outputs/apk/debug/app-debug.apk
+          path: extracted/Myraa/MYRAA-Native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
-
