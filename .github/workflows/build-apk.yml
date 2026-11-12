@@ -5,89 +5,100 @@ on:
   push:
     branches:
       - main
+
   workflow_dispatch:
     inputs:
       render_url:
-        description: "Myraa Render Server URL"
-        required: true
+        description: 'Myraa App URL'
+        required: false
         type: string
-
-permissions:
-  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository         
-        uses: actions/checkout@v5
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "11"
+          java-version: '17'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
-      - name: Install Android SDK
+      - name: Install Android SDK Packages
         run: |
           sdkmanager --install \
             "platforms;android-33" \
             "build-tools;33.0.2"
 
+      - name: Extract Myraa Project
+        run: |
+          mkdir -p extracted
+          unzip -o Myraa-ready.zip -d extracted
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "7.5"
+          gradle-version: '7.5'
 
-      - name: Extract Myraa ZIP
-        run: |
-          unzip -oq Myraa-ready.zip -d extracted
-          ls -la extracted
-          test -d extracted/Myraa/MYRAA-Native
-
-      - name: Configure Render URL
+      - name: Configure Myraa App URL
+        if: ${{ inputs.render_url != '' }}
         env:
-          RENDER_URL: ${{ inputs.render_url || 'https://myraax-eueg.onrender.com' }}
+          RENDER_URL: ${{ inputs.render_url }}
         run: |
           python3 - <<'PY'
-          import os, re, html
-          from pathlib import Path
+          import os
+          import re
+          from xml.sax.saxutils import escape
 
-          url = os.environ["RENDER_URL"].strip().rstrip("/")
-          path = Path("extracted/Myraa/MYRAA-Native/app/src/main/res/values/strings.xml")
+          path = "extracted/Myraa/MYRAA-Native/app/src/main/res/values/strings.xml"
+          url = os.environ.get("RENDER_URL", "").strip()
 
-          if not url.startswith("https://"):
-              raise SystemExit("Invalid Render URL")
+          if url:
+              if not url.startswith("https://"):
+                  raise SystemExit("URL must start with https://")
 
-          content = path.read_text(encoding="utf-8")
-          updated, count = re.subn(
-              r'(<string name="app_url">).*?(</string>)',
-              lambda m: m.group(1) + html.escape(url) + m.group(2),
-              content,
-              count=1
-          )
+              with open(path, "r", encoding="utf-8") as f:
+                  content = f.read()
 
-          if count != 1:
-              raise SystemExit("app_url not found in strings.xml")
+              replacement = (
+                  '<string name="app_url">'
+                  + escape(url)
+                  + '</string>'
+              )
 
-          path.write_text(updated, encoding="utf-8")
+              updated, count = re.subn(
+                  r'<string name="app_url">.*?</string>',
+                  lambda _: replacement,
+                  content,
+                  count=1,
+                  flags=re.DOTALL
+              )
+
+              if count == 0:
+                  raise SystemExit("app_url string not found in strings.xml")
+
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(updated)
+
+              print("Myraa App URL updated successfully.")
           PY
 
-      - name: Build APK
+      - name: Build Myraa APK
         run: |
           gradle -p extracted/Myraa/MYRAA-Native \
             --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Upload Myraa APK
         uses: actions/upload-artifact@v4
         with:
           name: Myraa-APK
           path: extracted/Myraa/MYRAA-Native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 7
