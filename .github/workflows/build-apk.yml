@@ -1,132 +1,124 @@
 
-name: Build APK
+name: MYRAA Android APK Build
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
 
-  workflow_dispatch:
-    inputs:
-      render_url:
-        description: 'Myraa App URL'
-        required: false
-        type: string
-
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      # 1. Checkout Repository
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      # 2. Setup Java
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # 3. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
 
-      - name: Install Android SDK Packages
+      # 4. Install Android SDK Packages
+      - name: Install Android SDK
         run: |
-          sdkmanager --install \
-            "platforms;android-33" \
-            "build-tools;33.0.2"
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-33"
+          sdkmanager "build-tools;33.0.2"
 
-      - name: Extract Myraa Project
+      # 5. Extract MYRAA Project
+      - name: Extract MYRAA ZIP
         run: |
+          if [ ! -f Myraa-ready.zip ]; then
+            echo "ERROR: Myraa-ready.zip not found!"
+            exit 1
+          fi
+
           mkdir -p extracted
-          unzip -o Myraa-ready.zip -d extracted
+          unzip -oq Myraa-ready.zip -d extracted
 
+          if [ ! -d extracted/Myraa/MYRAA-Native ]; then
+            echo "ERROR: Native Android project not found!"
+            find extracted -maxdepth 4 -type d
+            exit 1
+          fi
+
+      # 6. Fix Gradle Repository Conflict
       - name: Fix Gradle Repository Conflict
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          path = Path("extracted/Myraa/MYRAA-Native/settings.gradle")
+          path = Path("extracted/Myraa/MYRAA-Native/build.gradle")
 
           if not path.exists():
-              raise SystemExit("ERROR: settings.gradle not found")
+              raise SystemExit("ERROR: Root build.gradle not found")
 
           content = path.read_text(encoding="utf-8")
 
-          if "RepositoriesMode.PREFER_SETTINGS" in content:
-              content = content.replace(
-                  "RepositoriesMode.PREFER_SETTINGS",
-                  "RepositoriesMode.PREFER_PROJECT"
-              )
-              path.write_text(content, encoding="utf-8")
-              print("Repository mode changed successfully.")
-          elif "RepositoriesMode.PREFER_PROJECT" in content:
-              print("Repository mode is already correct.")
-          else:
-              raise SystemExit("ERROR: Repository mode not found")
+          pattern = r'(?m)^[ \t]*repositories[ \t]*\{'
+          match = re.search(pattern, content)
 
-          print("Updated settings.gradle:")
-          print(path.read_text(encoding="utf-8"))
+          if not match:
+              print("No root repositories block found. Continuing.")
+          else:
+              start = match.start()
+              brace_start = content.find("{", match.start())
+              depth = 0
+              end = None
+
+              for i in range(brace_start, len(content)):
+                  if content[i] == "{":
+                      depth += 1
+                  elif content[i] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          end = i + 1
+                          break
+
+              if end is None:
+                  raise SystemExit(
+                      "ERROR: Could not locate repositories block end"
+                  )
+
+              content = content[:start] + content[end:]
+              path.write_text(content, encoding="utf-8")
+
+              print("Root repositories block removed successfully.")
+
           PY
 
+      # 7. Setup Gradle 7.5
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '7.5'
 
-      - name: Configure Myraa App URL
-        if: ${{ inputs.render_url != '' }}
-        env:
-          RENDER_URL: ${{ inputs.render_url }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          from xml.sax.saxutils import escape
+      # 8. Verify Gradle
+      - name: Verify Gradle
+        run: gradle --version
 
-          path = "extracted/Myraa/MYRAA-Native/app/src/main/res/values/strings.xml"
-          url = os.environ.get("RENDER_URL", "").strip()
-
-          if url:
-              if not url.startswith("https://"):
-                  raise SystemExit("URL must start with https://")
-
-              with open(path, "r", encoding="utf-8") as f:
-                  content = f.read()
-
-              replacement = (
-                  '<string name="app_url">'
-                  + escape(url)
-                  + '</string>'
-              )
-
-              updated, count = re.subn(
-                  r'<string name="app_url">.*?</string>',
-                  lambda _: replacement,
-                  content,
-                  count=1,
-                  flags=re.DOTALL
-              )
-
-              if count == 0:
-                  raise SystemExit("app_url string not found")
-
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(updated)
-
-              print("Myraa App URL updated successfully.")
-          PY
-
-      - name: Build Myraa APK
+      # 9. Build APK
+      - name: Build MYRAA APK
         run: |
           gradle -p extracted/Myraa/MYRAA-Native \
-            --no-daemon assembleDebug
+            --no-daemon \
+            assembleDebug
 
-      - name: Upload Myraa APK
+      # 10. Upload APK
+      - name: Upload MYRAA APK
         uses: actions/upload-artifact@v4
         with:
-          name: Myraa-APK
+          name: MYRAA-Android-APK
           path: extracted/Myraa/MYRAA-Native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 7
