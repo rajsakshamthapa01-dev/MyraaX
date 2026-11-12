@@ -43,6 +43,34 @@ jobs:
           mkdir -p extracted
           unzip -o Myraa-ready.zip -d extracted
 
+      - name: Fix Gradle Repository Conflict
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("extracted/Myraa/MYRAA-Native/settings.gradle")
+
+          if not path.exists():
+              raise SystemExit("ERROR: settings.gradle not found")
+
+          content = path.read_text(encoding="utf-8")
+
+          if "RepositoriesMode.PREFER_SETTINGS" in content:
+              content = content.replace(
+                  "RepositoriesMode.PREFER_SETTINGS",
+                  "RepositoriesMode.PREFER_PROJECT"
+              )
+              path.write_text(content, encoding="utf-8")
+              print("Repository mode changed successfully.")
+          elif "RepositoriesMode.PREFER_PROJECT" in content:
+              print("Repository mode is already correct.")
+          else:
+              raise SystemExit("ERROR: Repository mode not found")
+
+          print("Updated settings.gradle:")
+          print(path.read_text(encoding="utf-8"))
+          PY
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -83,7 +111,7 @@ jobs:
               )
 
               if count == 0:
-                  raise SystemExit("app_url string not found in strings.xml")
+                  raise SystemExit("app_url string not found")
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(updated)
